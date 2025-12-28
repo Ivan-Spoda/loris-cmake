@@ -1,4 +1,4 @@
-name: Build Action...
+name: CMake on multiple platforms
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
             c_compiler: clang
             cpp_compiler: clang++
             cmake_generator: "Unix Makefiles"
-            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+            osx_architectures: "arm64;x86_64"
             lib_pattern: "*.dylib"
 
     steps:
@@ -80,8 +80,8 @@ jobs:
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=TRUE \
             -DBUILD_SHARED_LIBS=ON
 
-      - name: Configure CMake (Unix)
-        if: runner.os != 'Windows'
+      - name: Configure CMake (macOS)
+        if: runner.os == 'macOS'
         run: |
           cmake -B build \
             -G "${{ matrix.cmake_generator }}" \
@@ -89,7 +89,17 @@ jobs:
             -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
-            ${{ matrix.cmake_extra }}
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.osx_architectures }}"
+
+      - name: Configure CMake (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B build \
+            -G "${{ matrix.cmake_generator }}" \
+            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
