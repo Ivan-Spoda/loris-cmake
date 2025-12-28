@@ -27,15 +27,8 @@ jobs:
             c_compiler: gcc
             cpp_compiler: g++
             cmake_generator: "MinGW Makefiles"
+            cmake_extra: ""
             archive_ext: zip
-            
-          # Windows - MinGW Clang
-          # - os: windows-latest
-          #   name: windows-x64-mingw-clang
-          #   c_compiler: clang
-          #   cpp_compiler: clang++
-          #   cmake_generator: "MinGW Makefiles"
-          #   archive_ext: zip
             
           # Linux - GCC
           - os: ubuntu-latest
@@ -43,6 +36,7 @@ jobs:
             c_compiler: gcc
             cpp_compiler: g++
             cmake_generator: "Unix Makefiles"
+            cmake_extra: ""
             archive_ext: tar.gz
             
           # Linux - Clang
@@ -51,6 +45,7 @@ jobs:
             c_compiler: clang
             cpp_compiler: clang++
             cmake_generator: "Unix Makefiles"
+            cmake_extra: ""
             archive_ext: tar.gz
 
           # macOS - ARM64 (Apple Silicon)
@@ -74,41 +69,81 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup MinGW
+      # === Windows: Используем MSYS2 для MinGW ===
+      - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
-        uses: egor-tensin/setup-mingw@v2
+        uses: msys2/setup-msys2@v2
         with:
-          platform: x64
-          version: 13.2.0
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+          path-type: inherit
 
-      - name: Set reusable strings
+      - name: Set paths
         id: strings
         shell: bash
         run: |
-          echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+          echo "build-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
           echo "install-dir=${{ github.workspace }}/install" >> "$GITHUB_OUTPUT"
-          
-      - name: Configure CMake
-        run: >
-          cmake -B ${{ steps.strings.outputs.build-output-dir }}
-          -G "${{ matrix.cmake_generator }}"
-          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-          -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_INSTALL_PREFIX=${{ steps.strings.outputs.install-dir }}
-          -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=TRUE
-          -DBUILD_SHARED_LIBS=ON
-          ${{ matrix.cmake_extra }}
-          -S ${{ github.workspace }}
 
-      - name: Build
-        run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel
+      # === Configure: Windows ===
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cmake -B build \
+            -G "MinGW Makefiles" \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=TRUE \
+            -DBUILD_SHARED_LIBS=ON
 
-      - name: Install
-        run: cmake --install ${{ steps.strings.outputs.build-output-dir }} --config Release
+      # === Configure: Unix (Linux/macOS) ===
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cmake -B "${{ steps.strings.outputs.build-dir }}" \
+            -G "${{ matrix.cmake_generator }}" \
+            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${{ steps.strings.outputs.install-dir }}" \
+            -DBUILD_SHARED_LIBS=ON \
+            ${{ matrix.cmake_extra }}
 
-      - name: Test
-        working-directory: ${{ steps.strings.outputs.build-output-dir }}
+      # === Build ===
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --build build --config Release --parallel
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --build "${{ steps.strings.outputs.build-dir }}" --config Release --parallel
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --install build --config Release
+
+      - name: Install (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --install "${{ steps.strings.outputs.build-dir }}" --config Release
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure || true
+
+      - name: Test (Unix)
+        if: runner.os != 'Windows'
+        working-directory: ${{ steps.strings.outputs.build-dir }}
         run: ctest --build-config Release --output-on-failure || true
 
       - name: Get version
@@ -117,12 +152,13 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
-          elif [ "${{ github.event.inputs.version }}" != "" ]; then
+          elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.version }}" != "dev" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="build-${{ github.run_number }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
 
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
@@ -134,11 +170,13 @@ jobs:
 
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
           ARCHIVE_NAME="Loris-${{ steps.version.outputs.version }}-${{ matrix.name }}.tar.gz"
           tar -czvf "$ARCHIVE_NAME" -C install .
           echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
 
+      # === Upload ===
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -146,6 +184,9 @@ jobs:
           path: ${{ env.ARCHIVE_NAME }}
           retention-days: 30
 
+  # ============================================
+  # RELEASE JOB
+  # ============================================
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -162,6 +203,7 @@ jobs:
 
       - name: Get version
         id: version
+        shell: bash
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
@@ -183,21 +225,21 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: Loris ${{ steps.version.outputs.version }}
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') }}
+          prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'build') }}
           generate_release_notes: true
           files: release_files/*
           body: |
-            ##Loris Library ${{ steps.version.outputs.version }}
+            ## Loris Library ${{ steps.version.outputs.version }}
             
             ### Downloads
             
             | Platform | Architecture | Compiler | File |
             |----------|--------------|----------|------|
-            | Windows | x64 | MinGW GCC | `Loris-*-windows-x64-mingw-gcc.zip` |
-            | Linux | x64 | GCC | `Loris-*-linux-x64-gcc.tar.gz` |
-            | Linux | x64 | Clang | `Loris-*-linux-x64-clang.tar.gz` |
-            | macOS | ARM64 | Clang | `Loris-*-macos-arm64.tar.gz` |
-            | macOS | x64 | Clang | `Loris-*-macos-x64.tar.gz` |
+            | Windows | x64 | MinGW GCC 14 | `*-windows-x64-mingw-gcc.zip` |
+            | Linux | x64 | GCC | `*-linux-x64-gcc.tar.gz` |
+            | Linux | x64 | Clang | `*-linux-x64-clang.tar.gz` |
+            | macOS | ARM64 | Apple Clang | `*-macos-arm64.tar.gz` |
+            | macOS | x64 | Apple Clang | `*-macos-x64.tar.gz` |
             
             ### Archive Contents
             ```
