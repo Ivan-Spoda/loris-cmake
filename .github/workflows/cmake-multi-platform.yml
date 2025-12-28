@@ -11,11 +11,7 @@ on:
       version:
         description: 'Version tag (e.g., v1.0.0)'
         required: false
-        default: 'dev'
-      create_release:
-        description: 'Create release'
-        type: boolean
-        default: true
+        default: 'v1.0.0'
 
 jobs:
   build:
@@ -71,7 +67,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # === Windows: MSYS2 ===
       - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -84,14 +79,12 @@ jobs:
             make
           path-type: inherit
 
-      # === Linux x86: установка multilib ===
       - name: Setup multilib (Linux x86)
         if: runner.os == 'Linux' && matrix.arch_flags == '-m32'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
 
-      # === Configure: Windows ===
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -104,7 +97,6 @@ jobs:
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=TRUE \
             -DBUILD_SHARED_LIBS=ON
 
-      # === Configure: Linux ===
       - name: Configure CMake (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -117,7 +109,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON
 
-      # === Configure: macOS ===
       - name: Configure CMake (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -129,7 +120,6 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_OSX_ARCHITECTURES="${{ matrix.osx_architectures }}"
 
-      # === Build ===
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -139,21 +129,19 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake --build build --config Release --parallel
 
-      # === Version ===
       - name: Get version
         id: version
         shell: bash
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
-          elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.version }}" != "dev" ]; then
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="build-${{ github.run_number }}"
+            VERSION="v0.0.0-build.${{ github.run_number }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # === Prepare artifacts ===
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -161,10 +149,8 @@ jobs:
           cp -r src/*.h dist/include/ 2>/dev/null || true
           cp -r src/*.H dist/include/ 2>/dev/null || true
           find build -maxdepth 1 -name "${{ matrix.lib_pattern }}" -exec cp {} dist/lib/ \;
-          echo "=== Built libraries ==="
           ls -la dist/lib/
 
-      # === Archive ===
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -180,32 +166,20 @@ jobs:
           tar -czvf "$ARCHIVE_NAME" -C dist .
           echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
 
-      # === Upload ===
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Loris-${{ matrix.name }}
           path: ${{ env.ARCHIVE_NAME }}
-          retention-days: 1
+          retention-days: 30
 
   # ============================================
-  # RELEASE - теперь точно работает
+  # RELEASE
   # ============================================
   release:
     needs: build
     runs-on: ubuntu-latest
-    # Релиз создаётся при:
-    # 1. Push тега (v*)
-    # 2. Ручной запуск с create_release=true
-    # 3. Push в master (как dev-релиз)
-    if: |
-      always() &&
-      needs.build.result == 'success' &&
-      (
-        startsWith(github.ref, 'refs/tags/') ||
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && github.ref == 'refs/heads/master')
-      )
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     
     permissions:
       contents: write
@@ -222,10 +196,8 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
-          elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.version }}" != "dev" ]; then
-            VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="dev-${{ github.run_number }}"
+            VERSION="${{ github.event.inputs.version }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
@@ -237,44 +209,15 @@ jobs:
           echo "=== Release files ==="
           ls -la release_files/
 
-      - name: Delete existing release (for dev builds)
-        if: contains(steps.version.outputs.version, 'dev')
-        continue-on-error: true
-        run: |
-          gh release delete "${{ steps.version.outputs.version }}" --yes --cleanup-tag || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Loris ${{ steps.version.outputs.version }}
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'build') }}
-          generate_release_notes: true
+          prerelease: false
+          make_latest: true
+          generate_release_notes: false
           files: release_files/*
-          body: |
-            ## Loris Library ${{ steps.version.outputs.version }}
-            
-            ### Downloads
-            
-            | Platform | Architecture | Compiler | File |
-            |----------|--------------|----------|------|
-            | Windows | x64 | MinGW GCC | `*-windows-x64-gcc.zip` |
-            | Windows | x86 | MinGW GCC | `*-windows-x86-gcc.zip` |
-            | Linux | x64 | GCC | `*-linux-x64-gcc.tar.gz` |
-            | Linux | x86 | GCC | `*-linux-x86-gcc.tar.gz` |
-            | Linux | x64 | Clang | `*-linux-x64-clang.tar.gz` |
-            | macOS | Universal (ARM64+x64) | Clang | `*-macos-universal.tar.gz` |
-            
-            ### Archive structure
-            ```
-            ├── lib/
-            │   └── libLoris.so (.dll / .dylib)
-            └── include/
-                └── *.h
-            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
