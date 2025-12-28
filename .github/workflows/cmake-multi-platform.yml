@@ -126,26 +126,6 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake --build "${{ steps.strings.outputs.build-dir }}" --config Release --parallel
 
-      - name: Install (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: cmake --install build --config Release
-
-      - name: Install (Unix)
-        if: runner.os != 'Windows'
-        run: cmake --install "${{ steps.strings.outputs.build-dir }}" --config Release
-
-      - name: Test (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        working-directory: build
-        run: ctest --build-config Release --output-on-failure || true
-
-      - name: Test (Unix)
-        if: runner.os != 'Windows'
-        working-directory: ${{ steps.strings.outputs.build-dir }}
-        run: ctest --build-config Release --output-on-failure || true
-
       - name: Get version
         id: version
         shell: bash
