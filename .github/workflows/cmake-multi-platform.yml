@@ -29,7 +29,7 @@ jobs:
             cmake_generator: "MinGW Makefiles"
             archive_ext: zip
             
-          # Windows - MinGW Clang (опционально)
+          # Windows - MinGW Clang
           # - os: windows-latest
           #   name: windows-x64-mingw-clang
           #   c_compiler: clang
@@ -74,7 +74,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Установка MinGW на Windows
       - name: Setup MinGW
         if: runner.os == 'Windows'
         uses: egor-tensin/setup-mingw@v2
@@ -112,7 +111,6 @@ jobs:
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
         run: ctest --build-config Release --output-on-failure || true
 
-      # === Подготовка артефактов ===
       - name: Get version
         id: version
         shell: bash
@@ -148,11 +146,9 @@ jobs:
           path: ${{ env.ARCHIVE_NAME }}
           retention-days: 30
 
-  # === Создание релиза ===
   release:
     needs: build
     runs-on: ubuntu-latest
-    # Релиз только при пуше тега или ручном запуске
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     
     permissions:
@@ -191,7 +187,7 @@ jobs:
           generate_release_notes: true
           files: release_files/*
           body: |
-            ## 📦 Loris Library ${{ steps.version.outputs.version }}
+            ##Loris Library ${{ steps.version.outputs.version }}
             
             ### Downloads
             
@@ -203,7 +199,7 @@ jobs:
             | macOS | ARM64 | Clang | `Loris-*-macos-arm64.tar.gz` |
             | macOS | x64 | Clang | `Loris-*-macos-x64.tar.gz` |
             
-            ### 📁 Archive Contents
+            ### Archive Contents
             ```
             ├── bin/      # DLLs (Windows)
             ├── lib/      # Libraries (.so/.dylib/.a)
