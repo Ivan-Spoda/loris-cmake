@@ -1,22 +1,20 @@
 name: Build...
-
 on:
   push:
-    branches: [ "master" ]
-    tags: [ "v*" ]
+    branches: ["master"]
+    tags: ["v*"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v1.0.0)'
+        description: "Version tag (e.g., v1.0.0)"
         required: false
-        default: 'v1.0.0'
+        default: ""
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +25,7 @@ jobs:
             msystem: MINGW64
             mingw_prefix: mingw-w64-x86_64
             lib_pattern: "*.dll"
-            
+
           - os: windows-latest
             name: windows-x86-gcc
             msystem: MINGW32
@@ -41,14 +39,14 @@ jobs:
             cpp_compiler: g++
             arch_flags: ""
             lib_pattern: "*.so"
-            
+
           - os: ubuntu-latest
             name: linux-x86-gcc
             c_compiler: gcc
             cpp_compiler: g++
             arch_flags: "-m32"
             lib_pattern: "*.so"
-            
+
           # === macOS ===
           - os: macos-latest
             name: macos-universal
@@ -58,8 +56,7 @@ jobs:
             lib_pattern: "*.dylib"
 
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -166,19 +163,22 @@ jobs:
           path: ${{ env.ARCHIVE_NAME }}
           retention-days: 30
 
-  # ============================================
-  # RELEASE
-  # ============================================
   release:
     needs: build
     runs-on: ubuntu-latest
-    # НЕ запускаем только для pull_request
-    if: github.event_name != 'pull_request'
-    
+    if: |
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+
     permissions:
       contents: write
-      
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -190,13 +190,32 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            IS_TAG_PUSH="true"
           else
-            VERSION="v0.0.0-build.${{ github.run_number }}"
+            VERSION="${{ github.event.inputs.version }}"
+            IS_TAG_PUSH="false"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_tag_push=$IS_TAG_PUSH" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
+
+      - name: Create tag (manual dispatch)
+        if: steps.version.outputs.is_tag_push == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Проверяем, существует ли тег
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.version }} already exists!"
+            # Можно либо удалить старый тег, либо пропустить
+            # Для обновления релиза - удаляем
+            git push origin --delete "${{ steps.version.outputs.version }}" || true
+            git tag -d "${{ steps.version.outputs.version }}" || true
+          fi
+
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
 
       - name: Prepare release files
         run: |
@@ -205,15 +224,22 @@ jobs:
           echo "=== Release files ==="
           ls -la release_files/
 
+      - name: Delete existing release (if any)
+        run: |
+          gh release delete "${{ steps.version.outputs.version }}" --yes || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.5.0
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Loris ${{ steps.version.outputs.version }}
           draft: false
-          prerelease: false
+          prerelease: ${{ !startsWith(steps.version.outputs.version, 'v') || contains(steps.version.outputs.version, '-') }}
           make_latest: true
-          generate_release_notes: false
+          generate_release_notes: true
           files: release_files/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
